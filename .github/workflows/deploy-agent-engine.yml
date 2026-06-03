@@ -1,0 +1,80 @@
+name: Deploy Agent Engine
+
+# Deploys the redesign_agents ADK orchestrator (root_agent) to Vertex AI
+# Agent Engine in opsagent-prod / us-central1. Agent Engine is NOT available in
+# me-west1, so region is forced to us-central1 here and in the deploy script.
+#
+# Auth: GitHub OIDC -> Workload Identity Federation -> gha-deployer SA on
+# opsagent-prod (authorized via attribute.repository_owner/OpsAgentsAI). Proven
+# WIF pattern copied from a sibling Cloud Run deploy workflow. Zero long-lived secrets.
+#
+# ADK note: the repo pins google-adk==2.1.0 for the tested code; the managed
+# Agent Engine runtime expects 1.x, so we install google-adk<2 in CI and the
+# deploy script declares google-adk>=1.32,<2 in its managed requirements list.
+
+on:
+  workflow_dispatch:   # manual only in this public template — no push-triggered auto-deploy
+
+permissions:
+  contents: read
+  id-token: write   # REQUIRED for OIDC
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: opsagent-prod
+  REGION: us-central1
+  DEPLOY_SA: gha-deployer@opsagent-prod.iam.gserviceaccount.com
+  STAGING_BUCKET: gs://opsagent-prod-agent-engine-staging
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/523955774086/locations/global/workloadIdentityPools/github-actions-pool/providers/github-oidc
+          service_account: ${{ env.DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deploy dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "google-cloud-aiplatform[agent_engines]" "google-adk<2"
+
+      # Load the Arize Phoenix partner-MCP connection config from Secret Manager
+      # (gha-deployer SA needs secretAccessor on these — see docs/ARIZE_MCP.md).
+      # Missing secrets are tolerated (|| true): the deploy still runs but the
+      # script prints the eligibility warning. Values are masked from the log.
+      - name: Load Arize MCP config from Secret Manager
+        run: |
+          set +e
+          URL=$(gcloud secrets versions access latest --secret=arize-mcp-url --project="${PROJECT_ID}" 2>/dev/null)
+          KEY=$(gcloud secrets versions access latest --secret=arize-mcp-api-key --project="${PROJECT_ID}" 2>/dev/null)
+          if [ -n "$URL" ]; then echo "::add-mask::$URL"; echo "ARIZE_MCP_URL=$URL" >> "$GITHUB_ENV"; fi
+          if [ -n "$KEY" ]; then echo "::add-mask::$KEY"; echo "ARIZE_MCP_API_KEY=$KEY" >> "$GITHUB_ENV"; fi
+          if [ -z "$URL" ]; then echo "WARNING: arize-mcp-url secret not found — partner-MCP integration will be inactive."; fi
+
+      - name: Deploy to Agent Engine
+        env:
+          GOOGLE_GENAI_USE_VERTEXAI: "TRUE"
+          GOOGLE_CLOUD_PROJECT: ${{ env.PROJECT_ID }}
+          GOOGLE_CLOUD_LOCATION: ${{ env.REGION }}
+          AGENT_ENGINE_STAGING_BUCKET: ${{ env.STAGING_BUCKET }}
+          ARIZE_MCP_URL: ${{ env.ARIZE_MCP_URL }}
+          ARIZE_MCP_API_KEY: ${{ env.ARIZE_MCP_API_KEY }}
+        run: python scripts/deploy_agent_engine.py

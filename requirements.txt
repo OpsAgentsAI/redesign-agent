@@ -1,0 +1,5 @@
+# Continuous-ops ADK layer. Gemini on Vertex AI (no Anthropic in the path).
+google-adk==2.1.0
+# stdlib only for the monitor tools (urllib/json) — no extra runtime deps.
+# pytest is dev-only:
+#   pip install pytest

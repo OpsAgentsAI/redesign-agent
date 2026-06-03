@@ -1,0 +1,41 @@
+[debug] [2026-06-03T00:15:21.747Z] ----------------------------------------------------------------------
+[debug] [2026-06-03T00:15:21.749Z] Command:       /usr/local/bin/node /Users/michalshatz/.npm-global/bin/firebase projects:list
+[debug] [2026-06-03T00:15:21.749Z] CLI Version:   15.15.0
+[debug] [2026-06-03T00:15:21.749Z] Platform:      darwin
+[debug] [2026-06-03T00:15:21.749Z] Node Version:  v24.13.1
+[debug] [2026-06-03T00:15:21.749Z] Time:          Wed Jun 03 2026 03:15:21 GMT+0300 (Israel Daylight Time)
+[debug] [2026-06-03T00:15:21.749Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-06-03T00:15:21.819Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-06-03T00:15:21.820Z] > authorizing via signed-in user (michal@opsagents.agency)
+[debug] [2026-06-03T00:15:21.821Z] Checked if tokens are valid: false, expires at: 1777804819579
+[debug] [2026-06-03T00:15:21.821Z] Checked if tokens are valid: false, expires at: 1777804819579
+[debug] [2026-06-03T00:15:21.821Z] > refreshing access token with scopes: []
+[debug] [2026-06-03T00:15:21.821Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2026-06-03T00:15:21.821Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-06-03T00:15:22.047Z] <<< [apiv2][status] POST https://www.googleapis.com/oauth2/v3/token 400
+[debug] [2026-06-03T00:15:22.047Z] <<< [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[error] Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth
+
+For CI servers and headless environments, generate a new token with firebase login:ci
+[error] Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth
+
+For CI servers and headless environments, generate a new token with firebase login:ci
+[debug] [2026-06-03T00:15:22.049Z] Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth
+
+For CI servers and headless environments, generate a new token with firebase login:ci
+[debug] [2026-06-03T00:15:22.051Z] FirebaseError: Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth
+
+For CI servers and headless environments, generate a new token with firebase login:ci
+    at invalidCredentialError (/Users/michalshatz/.npm-global/lib/node_modules/firebase-tools/lib/auth.js:177:12)
+    at refreshTokens (/Users/michalshatz/.npm-global/lib/node_modules/firebase-tools/lib/auth.js:590:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async getAccessToken (/Users/michalshatz/.npm-global/lib/node_modules/firebase-tools/lib/apiv2.js:52:18)
+    at async Client.addAuthHeader (/Users/michalshatz/.npm-global/lib/node_modules/firebase-tools/lib/apiv2.js:182:21)
+    at async Client.request (/Users/michalshatz/.npm-global/lib/node_modules/firebase-tools/lib/apiv2.js:129:34)
+    at async getProjectPage (/Users/michalshatz/.npm-global/lib/node_modules/firebase-tools/lib/management/projects.js:287:17)
+    at async getFirebaseProjectPage (/Users/michalshatz/.npm-global/lib/node_modules/firebase-tools/lib/management/projects.js:304:23)
+    at async listFirebaseProjects (/Users/michalshatz/.npm-global/lib/node_modules/firebase-tools/lib/management/projects.js:333:29)
+    at async Command.actionFn (/Users/michalshatz/.npm-global/lib/node_modules/firebase-tools/lib/commands/projects-list.js:51:20)
+[error] 
+[error] Error: Failed to list Firebase projects. See firebase-debug.log for more info.

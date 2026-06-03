@@ -1,0 +1,68 @@
+name: Deploy Demo
+
+# Deploys the public "Northstar Studio" demo (demo/public) to the Firebase Hosting
+# site `redesign-agent-demo` on opsagent-prod -> https://redesign-agent-demo.web.app
+#
+# Hosting-only by design: it REUSES the shared, already-deployed Cloud Run proxy
+# `redesign-demo-proxy` (hardcoded in demo/public/index.html), so there is no Cloud
+# Run deploy and no IAM mutation here.
+#
+# Auth: GitHub OIDC -> Workload Identity Federation -> gha-deployer SA on
+# opsagent-prod (authorized via attribute.repository_owner/OpsAgentsAI). gha-deployer
+# already holds firebasehosting.admin. Zero long-lived secrets. firebase-tools picks
+# up ADC from the auth step (same proven pattern as deploy-agent-engine.yml).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'demo/public/**'
+      - 'firebase.json'
+      - '.github/workflows/deploy-demo.yml'
+
+permissions:
+  contents: read
+  id-token: write   # REQUIRED for OIDC
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: opsagent-prod
+  DEPLOY_SA: gha-deployer@opsagent-prod.iam.gserviceaccount.com
+  HOSTING_SITE: redesign-agent-demo
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/523955774086/locations/global/workloadIdentityPools/github-actions-pool/providers/github-oidc
+          service_account: ${{ env.DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Firebase CLI
+        run: npm i -g firebase-tools
+
+      - name: Deploy Hosting (PROD)
+        run: |
+          firebase deploy --only hosting:${HOSTING_SITE} \
+            --project "${PROJECT_ID}" --non-interactive
+
+      - name: Print URL
+        run: echo "PROD_URL=https://${HOSTING_SITE}.web.app"

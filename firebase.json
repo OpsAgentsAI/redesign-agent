@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "redesign-agent-demo",
     "public": "demo/public",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "headers": [

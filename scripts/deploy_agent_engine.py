@@ -81,11 +81,16 @@ _RUNTIME_ENV_KEYS = (
 
 
 def _build_runtime_env() -> dict:
-    """Collect the runtime env vars to forward into the managed Agent Engine."""
+    """Collect the runtime env vars to forward into the managed Agent Engine.
+
+    GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION are RESERVED by the Agent Engine runtime
+    (it injects them itself). Forwarding them in env_vars now hard-fails the create with
+    `FAILED_PRECONDITION: Environment variable name 'GOOGLE_CLOUD_PROJECT' is reserved`.
+    They are still set as process env (in main(), for vertexai.init + the agent import)
+    but must NOT be forwarded into the managed runtime's env_vars.
+    """
     env = {
         "GOOGLE_GENAI_USE_VERTEXAI": "TRUE",
-        "GOOGLE_CLOUD_PROJECT": PROJECT,
-        "GOOGLE_CLOUD_LOCATION": LOCATION,
     }
     for key in _RUNTIME_ENV_KEYS:
         val = os.environ.get(key)

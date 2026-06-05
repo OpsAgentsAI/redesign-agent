@@ -1,0 +1,115 @@
+name: Deploy Arize Phoenix MCP server
+
+# Deploys the streamable-HTTP Arize Phoenix MCP bridge (mcp-server/) to Cloud Run in
+# opsagent-prod / us-central1, then best-effort writes the arize-mcp-url + arize-mcp-api-key
+# secrets that deploy-agent-engine.yml consumes — so redeploying the agent (card WCxlUA2H)
+# picks up a live partner-MCP endpoint with no extra operator step.
+#
+# Auth: GitHub OIDC -> Workload Identity Federation -> gha-deployer SA on opsagent-prod
+# (authorized via attribute.repository_owner/OpsAgentsAI). Same proven WIF pattern as
+# deploy-agent-engine.yml / deploy-demo.yml. Zero long-lived secrets.
+#
+# Prereq (one-time, operator): the Phoenix System Key must live in Secret Manager as
+# `phoenix-api-key`, and gha-deployer must have run.admin + iam.serviceAccountUser +
+# Cloud Build/Artifact Registry push + (for the loop-closing step) secretmanager.admin.
+# Missing perms degrade gracefully: the deploy still succeeds; the secret-bootstrap step
+# logs a warning instead of failing.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # REQUIRED for OIDC
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: opsagent-prod
+  REGION: us-central1
+  SERVICE: arize-phoenix-mcp
+  DEPLOY_SA: gha-deployer@opsagent-prod.iam.gserviceaccount.com
+  RUNTIME_SA: arize-phoenix-mcp@opsagent-prod.iam.gserviceaccount.com
+  PHOENIX_BASE_URL: https://app.phoenix.arize.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/523955774086/locations/global/workloadIdentityPools/github-actions-pool/providers/github-oidc
+          service_account: ${{ env.DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      # Least-privilege runtime SA (best-effort create + grant secret read).
+      - name: Ensure runtime service account + secret access
+        run: |
+          set +e
+          gcloud iam service-accounts create arize-phoenix-mcp \
+            --project="$PROJECT_ID" --display-name="Arize Phoenix MCP proxy runtime" 2>/dev/null
+          gcloud secrets add-iam-policy-binding phoenix-api-key \
+            --project="$PROJECT_ID" \
+            --member="serviceAccount:${RUNTIME_SA}" \
+            --role=roles/secretmanager.secretAccessor 2>&1 | tail -1
+          echo "runtime SA prep done (non-fatal)"
+
+      - name: Deploy to Cloud Run (from source)
+        working-directory: mcp-server
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --source=. \
+            --service-account="$RUNTIME_SA" \
+            --allow-unauthenticated \
+            --min-instances=0 \
+            --max-instances=3 \
+            --memory=512Mi \
+            --timeout=120 \
+            --set-env-vars="PHOENIX_BASE_URL=${PHOENIX_BASE_URL}" \
+            --set-secrets="PHOENIX_API_KEY=phoenix-api-key:latest,MCP_AUTH_TOKEN=phoenix-api-key:latest"
+
+      - name: Capture URL + close the loop for deploy-agent-engine.yml
+        run: |
+          set +e
+          URL=$(gcloud run services describe "$SERVICE" --project="$PROJECT_ID" \
+            --region="$REGION" --format='value(status.url)')
+          echo "MCP_SERVICE_URL=${URL}"
+          MCP_URL="${URL}/mcp"
+
+          # arize-mcp-url = this service's streamable-HTTP endpoint.
+          printf '%s' "$MCP_URL" | gcloud secrets create arize-mcp-url \
+            --project="$PROJECT_ID" --data-file=- 2>/dev/null \
+          || printf '%s' "$MCP_URL" | gcloud secrets versions add arize-mcp-url \
+            --project="$PROJECT_ID" --data-file=-
+
+          # arize-mcp-api-key mirrors the Phoenix System Key (the bearer the agent sends).
+          KEY=$(gcloud secrets versions access latest --secret=phoenix-api-key --project="$PROJECT_ID" 2>/dev/null)
+          if [ -n "$KEY" ]; then
+            echo "::add-mask::$KEY"
+            printf '%s' "$KEY" | gcloud secrets create arize-mcp-api-key \
+              --project="$PROJECT_ID" --data-file=- 2>/dev/null \
+            || printf '%s' "$KEY" | gcloud secrets versions add arize-mcp-api-key \
+              --project="$PROJECT_ID" --data-file=-
+          else
+            echo "WARNING: phoenix-api-key not readable — set arize-mcp-api-key manually."
+          fi
+
+          # Let the agent deploy SA read both (it is the same gha-deployer here).
+          for S in arize-mcp-url arize-mcp-api-key; do
+            gcloud secrets add-iam-policy-binding "$S" --project="$PROJECT_ID" \
+              --member="serviceAccount:${DEPLOY_SA}" \
+              --role=roles/secretmanager.secretAccessor 2>&1 | tail -1
+          done
+          echo "loop-closing done (non-fatal). Next: run deploy-agent-engine.yml (card WCxlUA2H)."

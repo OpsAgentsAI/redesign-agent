@@ -39,6 +39,7 @@
  */
 import crypto from "node:crypto";
 import path from "node:path";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import express from "express";
 
@@ -68,12 +69,25 @@ const SERVER_VERSION = "1.0.0";
 // ---------------------------------------------------------------------------
 // Upstream: one persistent Phoenix MCP stdio child, shared by every session.
 // ---------------------------------------------------------------------------
-let upstream = null; // MCP Client connected to @arizeai/phoenix-mcp
+let upstream = null; // connected MCP Client, or null
+let upstreamPromise = null; // in-flight connect latch (prevents racing child spawns)
 let upstreamCaps = {}; // server capabilities advertised by Phoenix
 
-async function getUpstream() {
-  if (upstream) return upstream;
+// Lazily connect to the upstream Phoenix MCP stdio server, exactly once. Concurrent
+// callers share ONE in-flight promise, so a cold start under load can never spawn
+// multiple stdio children. A failed connect resets the latch so the next request retries.
+function getUpstream() {
+  if (upstream) return Promise.resolve(upstream);
+  if (!upstreamPromise) {
+    upstreamPromise = connectUpstream().catch((err) => {
+      upstreamPromise = null;
+      throw err;
+    });
+  }
+  return upstreamPromise;
+}
 
+async function connectUpstream() {
   // Launch the official Arize Phoenix MCP server over stdio. It is installed as a
   // dependency, so the bin is resolvable without a runtime npm fetch. Both CLI flags
   // and env are supplied for version tolerance.
@@ -94,11 +108,28 @@ async function getUpstream() {
   await client.connect(transport);
   upstreamCaps = client.getServerCapabilities() || {};
   upstream = client;
+
+  // If the stdio child dies (OOM, crash, SIGTERM) drop the cached client + latch so the
+  // next request transparently respawns it instead of forwarding to a dead process.
+  const reset = () => {
+    if (upstream === client) {
+      upstream = null;
+      upstreamPromise = null;
+      upstreamCaps = {};
+      console.error("[mcp] upstream Phoenix MCP closed — will reconnect on next request");
+    }
+  };
+  transport.onclose = reset;
+  transport.onerror = (e) => {
+    console.error("[mcp] upstream transport error:", e);
+    reset();
+  };
+
   console.error(
     `[mcp] upstream Phoenix MCP connected (baseUrl=${PHOENIX_BASE_URL}, ` +
       `caps=${Object.keys(upstreamCaps).join(",") || "none"})`
   );
-  return upstream;
+  return client;
 }
 
 // Resolve the executable JS entry of an installed MCP server package so we can spawn it
@@ -110,7 +141,9 @@ function resolveBin(pkg) {
   let bin = pkgJson.bin;
   if (bin && typeof bin === "object") bin = bin[Object.keys(bin)[0]];
   if (!bin) throw new Error(`${pkg} has no bin entry`);
-  return path.join(path.dirname(pkgJsonPath), bin);
+  const resolved = path.join(path.dirname(pkgJsonPath), bin);
+  fs.accessSync(resolved); // fail loud + early if the published build output is missing
+  return resolved;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +228,7 @@ app.post("/mcp", async (req, res) => {
         if (transport.sessionId) transports.delete(transport.sessionId);
       };
       await server.connect(transport);
+      transport.__proxyServer = server; // pin: keep the proxy Server reachable for the session's lifetime
     }
 
     await transport.handleRequest(req, res, req.body);

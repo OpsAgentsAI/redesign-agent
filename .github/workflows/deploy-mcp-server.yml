@@ -55,14 +55,23 @@ jobs:
       # Least-privilege runtime SA (best-effort create + grant secret read).
       - name: Ensure runtime service account + secret access
         run: |
-          set +e
+          # SA create is idempotent → tolerate "already exists".
           gcloud iam service-accounts create arize-phoenix-mcp \
-            --project="$PROJECT_ID" --display-name="Arize Phoenix MCP proxy runtime" 2>/dev/null
-          gcloud secrets add-iam-policy-binding phoenix-api-key \
+            --project="$PROJECT_ID" --display-name="Arize Phoenix MCP proxy runtime" 2>/dev/null || true
+          # The runtime SA MUST be able to read phoenix-api-key or the container 403s at
+          # startup. Bind explicitly and FAIL the deploy if it can't be granted — a silent
+          # miss here surfaces only as a crash-loop later.
+          if gcloud secrets add-iam-policy-binding phoenix-api-key \
             --project="$PROJECT_ID" \
             --member="serviceAccount:${RUNTIME_SA}" \
-            --role=roles/secretmanager.secretAccessor 2>&1 | tail -1
-          echo "runtime SA prep done (non-fatal)"
+            --role=roles/secretmanager.secretAccessor; then
+            echo "runtime SA can read phoenix-api-key"
+          else
+            echo "ERROR: could not grant ${RUNTIME_SA} secretAccessor on phoenix-api-key —"
+            echo "the container will 403 at startup. Grant gha-deployer secretmanager.admin (or"
+            echo "pre-bind the runtime SA) and re-run."
+            exit 1
+          fi
 
       - name: Deploy to Cloud Run (from source)
         working-directory: mcp-server
@@ -82,11 +91,12 @@ jobs:
 
       - name: Capture URL + close the loop for deploy-agent-engine.yml
         run: |
-          set +e
           URL=$(gcloud run services describe "$SERVICE" --project="$PROJECT_ID" \
             --region="$REGION" --format='value(status.url)')
+          [ -n "$URL" ] || { echo "ERROR: could not retrieve Cloud Run service URL"; exit 1; }
           echo "MCP_SERVICE_URL=${URL}"
           MCP_URL="${URL}/mcp"
+          set +e  # secret writes below are best-effort (loop-closing convenience)
 
           # arize-mcp-url = this service's streamable-HTTP endpoint.
           printf '%s' "$MCP_URL" | gcloud secrets create arize-mcp-url \

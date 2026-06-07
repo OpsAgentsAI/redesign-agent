@@ -32,7 +32,11 @@ env:
   SERVICE: arize-phoenix-mcp
   DEPLOY_SA: gha-deployer@opsagent-prod.iam.gserviceaccount.com
   RUNTIME_SA: arize-phoenix-mcp@opsagent-prod.iam.gserviceaccount.com
-  PHOENIX_BASE_URL: https://app.phoenix.arize.com
+  # Phoenix Cloud is multi-tenant: the API for our space lives under the /s/<space>
+  # path prefix. Hitting the bare host (no /s/michal) returns 401 on every tool call
+  # even with a valid key — the base URL MUST be the space-scoped URL (the "Hostname"
+  # shown in the Phoenix space settings).
+  PHOENIX_BASE_URL: https://app.phoenix.arize.com/s/michal
 
 jobs:
   deploy:

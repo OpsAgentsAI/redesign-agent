@@ -31,7 +31,7 @@ from __future__ import annotations
 import os
 import sys
 
-from google.adk.agents import Agent
+from google.adk.agents import Agent, SequentialAgent
 
 from .tools import arize_mcp_config_from_env, copy_draft, layout_proposal, site_audit, wp_publish
 
@@ -152,30 +152,46 @@ observability_agent = Agent(
     tools=[_arize_toolset] if _arize_toolset is not None else [],
 )
 
+# Deterministic worker pipeline. A SequentialAgent GUARANTEES the full
+# audit -> layout -> copy -> observability walk runs in order on every turn — the
+# orchestrator no longer relies on the LLM chaining five separate sub-agent transfers
+# (which stopped after layout_agent in production, so copy + the Arize MCP tool call
+# never fired — card 437QvmKH). observability_agent runs LAST so it has every prior
+# step's output in context to record to Arize Phoenix via its MCP server; it is
+# best-effort and never blocks the redesign. publish is intentionally NOT in this
+# pipeline — it stays behind the human-approval gate on the root supervisor.
+redesign_pipeline = SequentialAgent(
+    name="redesign_pipeline",
+    description=(
+        "Runs the redesign workers in order over the requested page: site_audit -> "
+        "layout -> copy -> observability (Arize Phoenix MCP). No publishing."
+    ),
+    sub_agents=[site_audit_agent, layout_agent, copy_agent, observability_agent],
+)
+
 root_agent = Agent(
     name="website_redesign_orchestrator",
     model=MODEL,
     description=(
         "Supervisor that redesigns the requested page (URL provided in the request) "
-        "end-to-end via sub-agents, with a hard human-approval gate before any "
-        "WordPress publish, and Arize Phoenix MCP observability."
+        "end-to-end via a deterministic worker pipeline, with a hard human-approval "
+        "gate before any WordPress publish, and Arize Phoenix MCP observability."
     ),
     instruction=(
         "You orchestrate a WordPress redesign of the requested page (the URL is "
         "provided in the request). Run this two-gate flow:\n"
-        "1. Delegate to site_audit_agent to audit the requested page(s).\n"
-        "2. Delegate to layout_agent for a proposed block sequence + rationale.\n"
-        "3. Delegate to copy_agent for HE + EN copy per block.\n"
-        "4. GATE 1 — present the proposed page tree, block sequence with rationale, "
-        "and HE/EN drafts, then STOP and ask the human to approve.\n"
-        "5. Only after explicit human approval, delegate to publish_agent to push the "
-        "approved drafts to STAGING WordPress (publish_agent uses approved=True only "
-        "then). GATE 2 — never auto-publish, never publish to production.\n"
-        "6. After GATE 1 (regardless of whether publishing happens), delegate to "
-        "observability_agent to record this run's quality signals to Arize Phoenix "
-        "via its MCP server. This is best-effort and must never block the redesign.\n"
-        "Reply in the user's language; preserve Hebrew feminine voice. Keep Gemini's "
-        "per-block reasoning visible — it is the proof the redesign is principled."
+        "1. Delegate to redesign_pipeline ONCE. It deterministically runs the full "
+        "sequence: site_audit -> layout (block sequence + rationale) -> copy (HE + EN "
+        "per block) -> observability (records the run's quality signals to Arize "
+        "Phoenix via its MCP server, best-effort).\n"
+        "2. GATE 1 — present the proposed page tree, block sequence with rationale, and "
+        "HE/EN drafts from the pipeline, then STOP. Ask the human to approve. Keep "
+        "Gemini's per-block reasoning visible — it is the proof the redesign is "
+        "principled.\n"
+        "3. GATE 2 — never auto-publish, never publish to production. ONLY after the "
+        "human explicitly approves in a later turn, delegate to publish_agent to push "
+        "the approved drafts to STAGING WordPress (it uses approved=True only then).\n"
+        "Reply in the user's language; preserve Hebrew feminine voice."
     ),
-    sub_agents=[site_audit_agent, layout_agent, copy_agent, publish_agent, observability_agent],
+    sub_agents=[redesign_pipeline, publish_agent],
 )

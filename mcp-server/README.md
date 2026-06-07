@@ -33,7 +33,7 @@ upstream Phoenix MCP server.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `PHOENIX_BASE_URL` | `https://app.phoenix.arize.com` | Phoenix instance the MCP server targets |
+| `PHOENIX_BASE_URL` | `https://app.phoenix.arize.com/s/michal` | Phoenix instance the MCP targets. **Phoenix Cloud is multi-tenant — must include the `/s/<space>` prefix** (the "Hostname" in space settings); the bare host 401s every tool call. |
 | `PHOENIX_API_KEY` | — | Phoenix System Key (forwarded to the upstream MCP server) |
 | `MCP_AUTH_TOKEN` | `= PHOENIX_API_KEY` | bearer token the agent must present on `/mcp` |
 | `PORT` | `8080` | Cloud Run port |
